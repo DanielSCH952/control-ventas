@@ -19,7 +19,7 @@ export default function RootLayout() {
         {/* La primera ruta alfabética del grupo (onboarding) no es la de
             bienvenida; initialRouteName garantiza que la app abra en el
             flujo de configuración correcto. */}
-        <Stack initialRouteName="welcome" screenOptions={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false }} />
       </AuthProvider>
     </ThemeProvider>
   );
