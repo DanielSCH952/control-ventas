@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // Reglas de seguridad de Firestore — Sprint 2 (identidad y negocio) +
-// Sprint 3 (ventas).
+// Sprint 3 (ventas) + Sprint 4 (edición y eliminación de ventas).
 //
 // Modelo de datos:
 //   users/{uid}                         → perfil (name, businessId)
@@ -10,7 +10,8 @@ rules_version = '2';
 //   businesses/{businessId}/sales/{id}  → venta (serviceType, quantity,
 //                                         unitPriceCents, totalCents,
 //                                         createdBy, createdByName,
-//                                         createdAt, updatedAt, notes?)
+//                                         createdAt, updatedAt, notes?,
+//                                         updatedBy?, updatedByName?)
 //   joinCodes/{code}                    → { businessId } (búsqueda por código)
 //
 // Principios:
@@ -18,8 +19,8 @@ rules_version = '2';
 //   - Los roles y businessId enviados por el cliente NO se confían:
 //     cada escritura se valida contra documentos existentes.
 //   - No se permite listar negocios ni códigos (solo lecturas puntuales).
-//   - El cambio de propietario, edición y borrado quedan bloqueados en este
-//     sprint (se habilitarán con sus propias reglas más adelante).
+//   - El cambio de propietario, edición y borrado de negocios/membresías
+//     quedan bloqueados (no forman parte de este sprint).
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -84,6 +85,14 @@ service cloud.firestore {
         return exists(/databases/$(database)/documents/businesses/$(businessId)/users/$(request.auth.uid));
       }
 
+      // El propietario del negocio es quien lo creó; es el mismo criterio
+      // que valida la membresía con rol "owner" (Sprint 2) y el que usa la
+      // interfaz (`business.createdBy`).
+      function isBusinessOwner() {
+        return get(/databases/$(database)/documents/businesses/$(businessId)).data.createdBy
+          == request.auth.uid;
+      }
+
       function profileHasNoBusiness() {
         return !exists(/databases/$(database)/documents/users/$(request.auth.uid))
           || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == null;
@@ -141,62 +150,117 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
-      // ===== Ventas (Sprint 3) =====
+      // ===== Ventas (Sprint 3 + Sprint 4) =====
       //
-      // Solo los miembros del negocio pueden leer y crear ventas; la
-      // edición y eliminación quedan bloqueadas hasta que se implementen
-      // en sprints posteriores. Los límites numéricos coinciden con las
-      // constantes de `src/services/saleService.ts`.
+      // - Cualquier miembro autorizado del negocio puede leer y crear ventas.
+      // - El creador de una venta puede editarla o eliminarla.
+      // - El propietario del negocio puede editar o eliminar cualquier venta.
+      // - Nadie ajeno al negocio puede leer, crear, editar ni eliminar
+      //   ventas (las reglas se aplican también fuera de la aplicación).
+      // - Los límites numéricos coinciden con las constantes de
+      //   `src/services/saleValidation.ts`.
       match /sales/{saleId} {
 
-        // Un documento de venta es válido si cumple el contrato completo:
-        // campos exactos (con `notes` opcional), tipos correctos, límites
-        // razonables, total coherente, registrante autenticado y
+        // Lista de campos que puede tener un documento de venta. Los campos
+        // de auditoría de edición (`updatedBy`, `updatedByName`) se añadieron
+        // en el Sprint 4 y son obligatorios tras una edición.
+        function saleFieldNames() {
+          return ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
+                  'createdBy', 'createdByName', 'createdAt', 'updatedAt',
+                  'notes', 'updatedBy', 'updatedByName'];
+        }
+
+        // Validación de los campos editables, compartida por crear y editar.
+        // El precio unitario mínimo es 1 centavo: un servicio sin tarifa
+        // sugerida debe capturarse manualmente y nunca puede ser $0.00.
+        function saleContentIsValid(data) {
+          return data.serviceType in
+                   ['COPY_BW', 'COPY_COLOR', 'PRINT_BW', 'PRINT_COLOR', 'RECHARGE', 'OTHER']
+                && data.quantity is int
+                && data.quantity >= 1
+                && data.quantity <= 1000
+                && data.unitPriceCents is int
+                && data.unitPriceCents >= 1
+                && data.unitPriceCents <= 10000000
+                && data.totalCents is int
+                && data.totalCents == data.quantity * data.unitPriceCents
+                && (
+                  !('notes' in data)
+                  || (data.notes is string && data.notes.size() <= 200)
+                );
+        }
+
+        // Un documento de venta nuevo es válido si cumple el contrato
+        // completo: campos exactos (con `notes` opcional), tipos correctos,
+        // límites razonables, total coherente, registrante autenticado y
         // timestamps de servidor.
         function saleIsValid() {
           return request.resource.data.keys().hasAll(
                    ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
                     'createdBy', 'createdByName', 'createdAt', 'updatedAt']
                  )
-                 && request.resource.data.keys().hasOnly(
-                   ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
-                    'createdBy', 'createdByName', 'createdAt', 'updatedAt', 'notes']
-                 )
-                 && request.resource.data.serviceType in
-                      ['COPY_BW', 'COPY_COLOR', 'PRINT_BW', 'PRINT_COLOR', 'RECHARGE', 'OTHER']
-                 && request.resource.data.quantity is int
-                 && request.resource.data.quantity >= 1
-                 && request.resource.data.quantity <= 1000
-                 && request.resource.data.unitPriceCents is int
-                 && request.resource.data.unitPriceCents >= 0
-                 && request.resource.data.unitPriceCents <= 10000000
-                 && request.resource.data.totalCents is int
-                 && request.resource.data.totalCents >= 0
-                 && request.resource.data.totalCents
-                      == request.resource.data.quantity * request.resource.data.unitPriceCents
+                 && request.resource.data.keys().hasOnly(saleFieldNames())
+                 && saleContentIsValid(request.resource.data)
                  && request.resource.data.createdBy == request.auth.uid
                  && request.resource.data.createdByName is string
                  && request.resource.data.createdByName.size() >= 1
                  && request.resource.data.createdByName.size() <= 50
                  && request.resource.data.createdAt == request.time
                  && request.resource.data.updatedAt == request.time
-                 && (
-                   !('notes' in request.resource.data)
-                   || (request.resource.data.notes is string
-                       && request.resource.data.notes.size() <= 200)
-                 );
+                 && !('updatedBy' in request.resource.data);
         }
 
-        // Cualquier miembro del negocio puede consultar las ventas
-        // (consulta inicial del Sprint 3; `onSnapshot` llegará en el 4).
+        // Puede tocar (editar o eliminar) esta venta quien la creó o el
+        // propietario del negocio; en ambos casos debe seguir siendo
+        // miembro del negocio.
+        function canModifyThisSale() {
+          return isMember()
+                 && (isBusinessOwner()
+                     || resource.data.createdBy == request.auth.uid);
+        }
+
+        // Una edición es válida si:
+        //  - los campos históricos no cambian (`createdBy`, `createdByName`,
+        //    `createdAt`);
+        //  - los campos finales cumplen el esquema permitido y el total
+        //    sigue siendo coherente;
+        //  - la auditoría de edición es correcta: `updatedAt` con timestamp
+        //    del servidor y `updatedBy` con el UID autenticado.
+        function saleUpdateIsValid() {
+          return request.resource.data.keys().hasAll(
+                   ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
+                    'createdBy', 'createdByName', 'createdAt', 'updatedAt',
+                    'updatedBy', 'updatedByName']
+                 )
+                 && request.resource.data.keys().hasOnly(saleFieldNames())
+                 && saleContentIsValid(request.resource.data)
+                 && request.resource.data.createdBy == resource.data.createdBy
+                 && request.resource.data.createdByName == resource.data.createdByName
+                 && request.resource.data.createdAt == resource.data.createdAt
+                 && request.resource.data.updatedAt == request.time
+                 && request.resource.data.updatedBy == request.auth.uid
+                 && request.resource.data.updatedByName is string
+                 && request.resource.data.updatedByName.size() >= 1
+                 && request.resource.data.updatedByName.size() <= 50;
+        }
+
+        // Cualquier miembro del negocio puede consultar las ventas, tanto la
+        // consulta inicial como la suscripción en tiempo real (`onSnapshot`,
+        // Sprint 4).
         allow read: if isSignedIn() && isMember();
 
         // Solo los miembros pueden crear ventas, siempre que el documento
         // cumpla el contrato y figure el propio UID como registrante.
         allow create: if isSignedIn() && isMember() && saleIsValid();
 
-        // La edición y eliminación de ventas no están implementadas.
-        allow update, delete: if false;
+        // Solo el creador de la venta o el propietario del negocio pueden
+        // editarla, con el esquema y la auditoría intactos.
+        allow update: if isSignedIn() && canModifyThisSale() && saleUpdateIsValid();
+
+        // Solo el creador de la venta o el propietario del negocio pueden
+        // eliminarla. La eliminación es permanente: no existe papelera ni
+        // borrado lógico en el modelo actual.
+        allow delete: if isSignedIn() && canModifyThisSale();
       }
     }
   }

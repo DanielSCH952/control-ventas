@@ -102,13 +102,15 @@ npx firebase-tools deploy --only firestore:rules
 businesses/{businessId}/sales/{saleId} → {
   serviceType:   'COPY_BW' | 'COPY_COLOR' | 'PRINT_BW' | 'PRINT_COLOR' | 'RECHARGE' | 'OTHER',
   quantity:      int (1–1000),
-  unitPriceCents: int ≥ 0 (máx. 10000000 = $100,000.00),
+  unitPriceCents: int ≥ 1 (máx. 10000000 = $100,000.00),
   totalCents:    int == quantity * unitPriceCents,
   createdBy:     uid del usuario autenticado,
   createdByName: nombre del perfil al registrar (1–50 caracteres),
   createdAt:     serverTimestamp(),
   updatedAt:     serverTimestamp(),
   notes?:        string (≤ 200 caracteres),
+  updatedBy?:     uid de quien editó (Sprint 4; ausente hasta la primera edición),
+  updatedByName?: nombre de quien editó (1–50 caracteres),
 }
 ```
 
@@ -118,19 +120,35 @@ businesses/{businessId}/sales/{saleId} → {
   pantalla; `createdBy` siempre es el UID de la sesión activa.
 - Cada venta conserva su precio y total finales; no se recalculan con las
   tarifas vigentes.
+- Las ventas creadas antes del Sprint 4 no tienen `updatedBy`/`updatedByName`;
+  la app las muestra sin problema y esos campos se añaden con la primera
+  edición. Nunca alteran al autor original (`createdBy`/`createdByName`).
 
 ### Reglas de seguridad para ventas
 
 Resumen (detalle en `firestore.rules`, bloque `match /sales/{saleId}`):
 
-- `read`: solo usuarios autenticados que sean miembros del negocio.
+- `read`: solo usuarios autenticados que sean miembros del negocio
+  (incluye la suscripción en tiempo real `onSnapshot` del Sprint 4).
 - `create`: miembros autenticados + validación completa del documento:
   campos exactos (con `notes` opcional), `serviceType` del catálogo,
-  cantidad entera 1–1000, precio y total enteros no negativos con límites,
+  cantidad entera 1–1000, precio y total enteros con límites,
   `totalCents == quantity * unitPriceCents`, `createdBy == request.auth.uid`,
   `createdByName` de 1–50 caracteres, `createdAt`/`updatedAt` iguales a
   `request.time` (garantiza `serverTimestamp()`).
-- `update`/`delete`: bloqueados (no implementados en este sprint).
+- `update` (Sprint 4): solo el **creador de la venta** o el **propietario del
+  negocio** (`isBusinessOwner()`, quien aparece como `createdBy` del
+  negocio). La validación exige: campos finales exactos del esquema
+  permitido (incluidos `updatedBy`/`updatedByName`), `serviceType` del
+  catálogo, cantidad 1–1000, precio 1–10 000 000 centavos,
+  `totalCents == quantity * unitPriceCents`, notas ≤ 200 caracteres,
+  `createdBy`/`createdByName`/`createdAt` sin cambios,
+  `updatedAt == request.time` y `updatedBy == request.auth.uid`.
+- `delete` (Sprint 4): solo el creador de la venta o el propietario del
+  negocio. La eliminación es **permanente**: no existe papelera, borrado
+  lógico ni cancelación en el modelo actual.
+- Ningún usuario ajeno al negocio puede leer, crear, editar ni eliminar
+  ventas; las reglas se aplican también a peticiones fuera de la app.
 
 ### Índices
 
@@ -195,3 +213,72 @@ dispositivo/emulador. Verificar en dos teléfonos distintos:
 4. En Firestore Console, comprobar documentos creados: `users/{uid}`,
    `businesses/{id}`, `businesses/{id}/users/{uid}` (roles owner/member) y
    `joinCodes/{code}`.
+
+## Prueba de sincronización con dos teléfonos (Sprint 4) — PENDIENTE
+
+Procedimiento manual reproducible. **Obligatorio antes de dar el Sprint 4 por
+verificado**: la sincronización en tiempo real entre dos dispositivos no se
+puede comprobar desde el entorno de desarrollo.
+
+> No confundir la actualización local de la interfaz con una escritura
+> confirmada por Firebase: el historial solo cambia en el otro teléfono si
+> el servidor confirmó la operación y la suscripción `onSnapshot` propagó
+> el cambio.
+
+### Preparación
+
+1. **Publicar las reglas actualizadas** (contienen `update`/`delete` de
+   ventas; sin publicarlas, editar/eliminar fallará con
+   `permission-denied`):
+   - Firebase Console → Firestore Database → Reglas → pegar el contenido de
+     `firestore.rules` → Publicar, **o**
+   - `npx firebase-tools deploy --only firestore:rules`.
+2. Instalar la misma build en el teléfono A (propietario/creador) y el
+   teléfono B (unido por código de invitación). Ambos abren **el mismo
+   negocio** y permanecen en la pantalla principal.
+
+### Pasos
+
+3. **Alta en tiempo real**: registrar una venta desde A (p. ej. Copia B/N,
+   8 × $1.00). Verificar que aparece en B **sin recargar manualmente** (sin
+   salir de la pantalla ni tirar para actualizar). El reloj de
+   «Sincronizado en tiempo real» de B debe avanzar solo.
+4. **Edición en tiempo real**: desde A, pulsar «Editar» en la venta,
+   cambiar cantidad a 10 y guardar. Verificar que B muestra la venta con
+   el nuevo total ($10.00) sin recargar, y que la fecha de creación y el
+   autor («registrada por …») no cambian. En Firestore Console, el
+   documento debe tener `updatedAt` nuevo, `updatedBy` = UID de A y
+   `updatedByName` = nombre de A.
+5. **Eliminación en tiempo real**: desde A, pulsar «Eliminar» y confirmar
+   el diálogo. Verificar que la venta desaparece de B sin recargar. La
+   eliminación es permanente (no hay papelera).
+6. **Permisos de edición/eliminación ajenos**: en B, buscar una venta
+   registrada por A. B **no debe ver** los botones «Editar»/«Eliminar» de
+   esa venta. Si se intenta desde Firestore Console → Reglas → Playground
+   (simulando el UID de B), la operación debe rechazarse. Caso inverso: A
+   (propietario) sí puede editar/eliminar ventas registradas por B.
+7. **Usuario de otro negocio**: con una instalación nueva que crea (o se
+   une a) OTRO negocio, verificar que su lista no muestra las ventas del
+   primer negocio y que cualquier lectura/escritura directa sobre
+   `businesses/{otro}/sales/...` se rechaza (Reglas → Playground con UID
+   ajeno → denegado).
+8. **Sesión persistente**: cerrar y reabrir la app en A y en B. Ambos
+   deben volver a la pantalla principal con el mismo nombre y negocio, y
+   el historial debe cargar completo vía `onSnapshot`.
+9. **Fechas pendientes**: al registrar una venta con la conexión activa,
+   la lista muestra al instante una fecha aproximada local (estimación de
+   `serverTimestamp()`); tras la confirmación del servidor no debe haber
+   saltos raros ni duplicados en el orden de la lista. Registrar cualquier
+   anomalía.
+10. **Registrar cualquier error** de red (sin conexión: la lista debe
+    mostrar el mensaje de error y el botón «Reintentar», conservando los
+    datos ya cargados), permisos o fechas observado durante la sesión.
+
+### Resultado esperado en caso de falla
+
+- Si una edición/eliminación devuelve «No tienes permiso para modificar
+  esta venta…» siendo el creador: las reglas publicadas no son las de este
+  sprint → repetir el paso 1.
+- Si la lista no se actualiza sola en B: revisar la consola de Firebase
+  en busca de errores de suscripción y confirmar que ambos teléfonos usan el
+  mismo `projectId`.

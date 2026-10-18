@@ -15,6 +15,15 @@ export interface Sale {
 
   createdByName: string;
 
+  /**
+   * Auditoría de edición (Sprint 4). Los documentos creados en sprints
+   * anteriores no tienen estos campos: se tratan como opcionales para que
+   * la conversión de documentos antiguos siga funcionando.
+   */
+  updatedBy?: string;
+
+  updatedByName?: string;
+
   createdAt: Date;
 
   updatedAt: Date;

@@ -1,119 +1,39 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
+  deleteField,
+  doc,
+  getDoc,
   getDocs,
   limit as limitQuery,
   orderBy,
   query,
   serverTimestamp,
-  type DocumentData,
+  updateDoc,
 } from 'firebase/firestore';
 
 import type { CreateSaleInput, Sale } from '@/types/Sale';
-import { SERVICE_TYPES, toServiceType } from '@/constants/services';
 
 import { db } from './firebase';
 import { AppError } from './errors';
-import { parseDate } from './firestore-utils';
+import {
+  CREATED_BY_NAME_MAX_LENGTH,
+  toSale,
+  validateSaleInput,
+} from './saleValidation';
 
-// ===== Límites (reflejados en firestore.rules) =====
+// Los límites y la validación de entradas viven en `saleValidation` para poder
+// probarlos sin Firebase; se re-exportan porque la interfaz ya los importaba
+// desde este módulo.
+export {
+  MAX_SALE_NOTES_LENGTH,
+  MAX_SALE_QUANTITY,
+  MAX_UNIT_PRICE_CENTS,
+} from './saleValidation';
 
-/** Cantidad máxima permitida por venta. */
-export const MAX_SALE_QUANTITY = 1000;
-/** Precio unitario máximo: 10 000 000 centavos = $100,000.00 MXN. */
-export const MAX_UNIT_PRICE_CENTS = 10_000_000;
-/** Longitud máxima de las observaciones. */
-export const MAX_SALE_NOTES_LENGTH = 200;
 /** Ventas devueltas por la consulta inicial. */
 export const SALE_RECENT_LIMIT = 50;
-/** Longitud máxima del nombre del registrante (coincide con el perfil). */
-const CREATED_BY_NAME_MAX_LENGTH = 50;
-
-/**
- * Convierte un documento de Firestore a `Sale`.
- * Devuelve null (y registra una advertencia) si el documento no cumple el
- * contrato, en lugar de propagar datos corruptos a la interfaz.
- */
-function toSale(id: string, data: DocumentData): Sale | null {
-  const serviceType = toServiceType(data.serviceType);
-  const { quantity, unitPriceCents, totalCents, createdBy, createdByName, createdAt, updatedAt, notes } = data;
-
-  if (
-    !serviceType
-    || typeof quantity !== 'number'
-    || typeof unitPriceCents !== 'number'
-    || typeof totalCents !== 'number'
-    || typeof createdBy !== 'string'
-    || typeof createdByName !== 'string'
-  ) {
-    console.warn('[saleService] Documento de venta con datos inválidos, se omite:', id);
-    return null;
-  }
-
-  return {
-    id,
-    serviceType,
-    quantity,
-    unitPriceCents,
-    totalCents,
-    createdBy,
-    createdByName,
-    createdAt: parseDate(createdAt),
-    updatedAt: parseDate(updatedAt),
-    notes: typeof notes === 'string' ? notes : undefined,
-  };
-}
-
-/**
- * Valida los datos de la venta contra el contrato del sprint:
- *  - servicio conocido;
- *  - cantidad entera positiva dentro del límite;
- *  - precio unitario entero positivo dentro del límite (no se aceptan
- *    precios $0.00: un servicio sin tarifa debe capturarse manualmente);
- *  - total exactamente igual a `quantity * unitPriceCents`;
- *  - observaciones opcionales con longitud limitada.
- *
- * Devuelve la entrada normalizada o lanza `AppError` apto para la interfaz.
- */
-function validateSaleInput(input: CreateSaleInput): CreateSaleInput {
-  if (!SERVICE_TYPES.includes(input.serviceType)) {
-    throw new AppError('Selecciona un servicio válido.', 'invalid-sale-service');
-  }
-  if (!Number.isInteger(input.quantity) || input.quantity < 1) {
-    throw new AppError('La cantidad debe ser un número entero mayor que 0.', 'invalid-sale-quantity');
-  }
-  if (input.quantity > MAX_SALE_QUANTITY) {
-    throw new AppError(`La cantidad no puede superar ${MAX_SALE_QUANTITY}.`, 'invalid-sale-quantity');
-  }
-  if (!Number.isInteger(input.unitPriceCents) || input.unitPriceCents < 1) {
-    throw new AppError('El precio unitario debe ser mayor que $0.00.', 'invalid-sale-price');
-  }
-  if (input.unitPriceCents > MAX_UNIT_PRICE_CENTS) {
-    throw new AppError('El precio unitario es demasiado alto.', 'invalid-sale-price');
-  }
-  if (!Number.isInteger(input.totalCents) || input.totalCents !== input.quantity * input.unitPriceCents) {
-    throw new AppError(
-      'El total no coincide con la cantidad y el precio unitario. Revisa los datos.',
-      'invalid-sale-total',
-    );
-  }
-
-  const notes = input.notes?.trim() ?? '';
-  if (notes.length > MAX_SALE_NOTES_LENGTH) {
-    throw new AppError(
-      `Las observaciones no pueden superar ${MAX_SALE_NOTES_LENGTH} caracteres.`,
-      'invalid-sale-notes',
-    );
-  }
-
-  return {
-    serviceType: input.serviceType,
-    quantity: input.quantity,
-    unitPriceCents: input.unitPriceCents,
-    totalCents: input.totalCents,
-    notes: notes.length > 0 ? notes : undefined,
-  };
-}
 
 /**
  * Crea una venta en `businesses/{businessId}/sales/{saleId}`.
@@ -237,6 +157,183 @@ export async function listRecentSales(
       'No pudimos cargar las ventas. Revisa tu conexión e inténtalo de nuevo.',
       'sale-list-failed',
     );
+  }
+}
+
+/**
+ * Obtiene una venta individual del negocio. La pantalla de edición la usa
+ * para cargar el documento antes de permitir modificarlo: el identificador
+ * llega del enlace de navegación, pero el documento solo existe dentro del
+ * negocio autenticado del usuario, así que no se puede leer de otro negocio.
+ */
+export async function getSaleById(businessId: string, saleId: string): Promise<Sale> {
+  if (!businessId || !saleId) {
+    throw new AppError(
+      'Tu perfil no tiene un negocio asociado. Cierra y vuelve a abrir la aplicación.',
+      'missing-business',
+    );
+  }
+
+  try {
+    const docRef = doc(db, 'businesses', businessId, 'sales', saleId);
+    const snapshot = await getDoc(docRef);
+
+    if (!snapshot.exists()) {
+      throw new AppError('La venta que buscas ya no existe en este negocio.', 'sale-not-found');
+    }
+
+    const sale = toSale(snapshot.id, snapshot.data());
+    if (!sale) {
+      throw new AppError(
+        'La venta tiene datos dañados y no se puede abrir. Puedes eliminarla y registrarla de nuevo.',
+        'sale-invalid-document',
+      );
+    }
+    return sale;
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    console.warn('[saleService] Error al obtener la venta:', error);
+    throw new AppError(
+      'No pudimos cargar la venta. Revisa tu conexión e inténtalo de nuevo.',
+      'sale-get-failed',
+    );
+  }
+}
+
+/**
+ * Traduce un error de escritura de Firestore a un `AppError` comprensible.
+ * `permission-denied` es el caso esperado cuando las reglas rechazan a un
+ * usuario que no es creador ni propietario de la venta.
+ */
+function toWriteAppError(
+  error: unknown,
+  action: 'guardar los cambios' | 'eliminar la venta',
+  code: string,
+): AppError {
+  const firestoreCode = (error as { code?: string } | null)?.code;
+  switch (firestoreCode) {
+    case 'permission-denied':
+      return new AppError(
+        'No tienes permiso para modificar esta venta. Solo puede hacerlo quien la registró o el propietario del negocio.',
+        `${code}-denied`,
+      );
+    case 'unauthenticated':
+      return new AppError(
+        'Tu sesión expiró. Cierra y vuelve a abrir la aplicación e inténtalo de nuevo.',
+        'missing-session',
+      );
+    case 'unavailable':
+      return new AppError(
+        'Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo.',
+        'sales-write-offline',
+      );
+    default:
+      return new AppError(
+        `No pudimos ${action}. Revisa tu conexión e inténtalo de nuevo.`,
+        code,
+      );
+  }
+}
+
+/**
+ * Actualiza una venta existente (Sprint 4).
+ *
+ * Solo se modifican los campos editables (`serviceType`, `quantity`,
+ * `unitPriceCents`, `totalCents`, `notes`) y la auditoría de edición:
+ *  - `updatedAt` con `serverTimestamp()` (coincide con `request.time`);
+ *  - `updatedBy` con el UID de quien edita;
+ *  - `updatedByName` como instantánea del nombre del editor.
+ *
+ * `createdBy`, `createdByName` y `createdAt` nunca se tocan: la venta
+ * conserva su autor histórico. Si `notes` queda vacía, el campo se elimina
+ * del documento para mantener el mismo formato que `createSale()`.
+ *
+ * Las reglas de Firestore son la autoridad de seguridad: un usuario que no
+ * sea creador ni propietario recibe `permission-denied`.
+ */
+export async function updateSale(params: {
+  businessId: string;
+  saleId: string;
+  actor: { uid: string; name: string };
+  input: CreateSaleInput;
+}): Promise<void> {
+  const { businessId, saleId, actor, input } = params;
+
+  if (!actor.uid) {
+    throw new AppError('No hay una sesión activa. Vuelve a intentarlo.', 'missing-session');
+  }
+  if (!businessId || !saleId) {
+    throw new AppError(
+      'Tu perfil no tiene un negocio asociado. Cierra y vuelve a abrir la aplicación.',
+      'missing-business',
+    );
+  }
+
+  const updatedByName = actor.name.trim();
+  if (updatedByName.length < 1 || updatedByName.length > CREATED_BY_NAME_MAX_LENGTH) {
+    throw new AppError(
+      'Tu nombre de perfil no es válido. Edítalo antes de modificar ventas.',
+      'invalid-actor-name',
+    );
+  }
+
+  const sale = validateSaleInput(input);
+
+  try {
+    const docRef = doc(db, 'businesses', businessId, 'sales', saleId);
+    await updateDoc(docRef, {
+      serviceType: sale.serviceType,
+      quantity: sale.quantity,
+      unitPriceCents: sale.unitPriceCents,
+      totalCents: sale.totalCents,
+      // Mismo formato que createSale(): sin notas no hay campo `notes`.
+      ...(sale.notes !== undefined ? { notes: sale.notes } : { notes: deleteField() }),
+      updatedAt: serverTimestamp(),
+      updatedBy: actor.uid,
+      updatedByName,
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    console.warn('[saleService] Error al actualizar la venta:', error);
+    throw toWriteAppError(error, 'guardar los cambios', 'sale-update-failed');
+  }
+}
+
+/**
+ * Elimina una venta de forma permanente (Sprint 4).
+ *
+ * La eliminación es IRREVERSIBLE en el modelo actual: no existe papelera,
+ * cancelación ni borrado lógico. No se toca el negocio, la membresía ni el
+ * perfil del usuario. Las reglas de Firestore solo la permiten al creador
+ * de la venta o al propietario del negocio; cualquier otro usuario recibe
+ * `permission-denied`.
+ *
+ * La lista de la interfaz se actualiza sola: `useSales` recibe el evento de
+ * borrado a través de `onSnapshot`.
+ */
+export async function deleteSale(params: {
+  businessId: string;
+  saleId: string;
+}): Promise<void> {
+  const { businessId, saleId } = params;
+
+  if (!businessId || !saleId) {
+    throw new AppError(
+      'Tu perfil no tiene un negocio asociado. Cierra y vuelve a abrir la aplicación.',
+      'missing-business',
+    );
+  }
+
+  try {
+    const docRef = doc(db, 'businesses', businessId, 'sales', saleId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.warn('[saleService] Error al eliminar la venta:', error);
+    throw toWriteAppError(error, 'eliminar la venta', 'sale-delete-failed');
   }
 }
 
