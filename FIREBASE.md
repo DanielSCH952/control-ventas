@@ -214,6 +214,93 @@ dispositivo/emulador. Verificar en dos teléfonos distintos:
    `businesses/{id}`, `businesses/{id}/users/{uid}` (roles owner/member) y
    `joinCodes/{code}`.
 
+## Sprint 5 — Reportes diarios, semanales y desglose de ventas
+
+### Qué son los reportes
+
+La pestaña **Reportes** (`src/app/(tabs)/reports.tsx`) muestra las **ventas registradas en la aplicación** para un día o una semana del negocio activo: total vendido, número de ventas, unidades registradas, ticket promedio, mayor venta registrada, y desgloses por tipo de servicio y por usuario que registró cada venta.
+
+> **Importante:** los reportes NO representan ganancias netas, utilidad, ni dinero efectivamente cobrado por otros medios (efectivo fuera de la app, gastos, costos, etc.). Solo agregan las ventas registradas en la aplicación.
+
+### Cómo se definen los días y las semanas
+
+- **Zona horaria:** la LOCAL del dispositivo. El modelo de datos no almacena una zona horaria del negocio, así que esta versión no inventa una; los límites se construyen con los constructores locales de `Date` (`new Date(año, mes, día)`). Nunca se comparan fechas locales con cadenas UTC. Si el dispositivo cambia de zona horaria, los límites del período consultado pueden variar; el rango exacto siempre se muestra en pantalla.
+- **Intervalo semiabierto:** `[inicio, fin)` — el inicio está incluido y el fin excluido.
+  - **Diario:** de las 00:00 locales del día a las 00:00 locales del día siguiente (sin incluir ese instante final). Una venta registrada exactamente a medianoche pertenece al día que empieza.
+  - **Semanal:** lunes → domingo, de las 00:00 del lunes a las 00:00 del lunes siguiente. Un domingo pertenece a la semana que empezó el lunes anterior.
+- Implementación pura en `src/utils/reportPeriods.ts` (`getDayPeriod`, `getWeekPeriod`, `isDateInPeriod`, `getMonthCalendar`), probada en `tests/report-periods.test.ts`.
+
+### Cómo se filtran las ventas
+
+La pantalla usa una consulta de reportes propia (`src/services/reportService.ts` → `useReportSales`), **no** `useSales`: esa suscripción está limitada a las 100 ventas recientes del negocio y truncaría períodos con más actividad.
+
+La consulta filtra en el servidor sobre `businesses/{businessId}/sales`:
+
+```
+where('createdAt', '>=', period.start)  // incluido
+where('createdAt', '<', period.end)     // excluido
+```
+
+- El `businessId` llega SIEMPRE del contexto de autenticación (`useAuth`); la interfaz no permite elegir otro negocio.
+- No se aplica `limit`: un día o una semana devuelve todos sus documentos.
+- Es una suscripción `onSnapshot`: crear, editar o eliminar ventas dentro del período consultado actualiza el reporte automáticamente. Al cambiar de período o negocio se cancela la suscripción anterior (una sola suscripción por período; todos los indicadores derivan del mismo conjunto de ventas).
+- La consulta reutiliza el conversor `toSale` (`src/services/saleValidation.ts`); los documentos que no cumplen el contrato se excluyen con advertencia en consola.
+
+### Índices
+
+**No se requiere ningún índice nuevo.** La consulta filtra por un solo campo (`createdAt`) con dos comparaciones de rango; Firestore la resuelve con el índice automático de campo único. No se modificó `firestore.indexes.json` ni `firestore.rules` en este sprint.
+
+### Tratamiento de fechas pendientes (`serverTimestamp()`)
+
+Las ventas recién creadas con `serverTimestamp()` pueden llegar a la suscripción antes de que el servidor confirme su `createdAt`. El reporte las lee con `serverTimestamps: 'none'` (la fecha llega como `null`) y **las excluye del cálculo en lugar de asignarles una fecha estimada** que podría meterlas en el período incorrecto. Se cuentan en `pendingTimestampCount` y la pantalla muestra un aviso informativo; cuando el servidor confirma la fecha, `onSnapshot` emite una nueva instantánea y la venta aparece en su período real (normalmente en segundos).
+
+Los reportes se basan SIEMPRE en `createdAt` (fecha original). Editar una venta no la traslada de día ni de semana, y `updatedBy`/`updatedAt` solo son auditoría: la autoría del desglose por usuario siempre es `createdBy`/`createdByName`.
+
+### Cómo se calculan los indicadores (funciones puras)
+
+Los cálculos viven en `src/utils/reportAggregations.ts`, separados de React y Firebase, y reciben ventas ya convertidas:
+
+| Indicador | Fórmula |
+|---|---|
+| Total vendido | Σ `totalCents` (enteros; nunca punto flotante) |
+| Número de ventas | conteo de ventas válidas del período |
+| Unidades registradas | Σ `quantity` (no es el número de ventas) |
+| Ticket promedio | `round(Σ totalCents / nº ventas)`; 0 si no hay ventas |
+| Mayor venta registrada | máx `totalCents`; `null` si no hay ventas |
+| Porcentajes | `round(parte × 10000 / total) / 100` (2 decimales); 0 si el total es 0 — nunca divide entre cero. Solo presentación: no se usan para calcular totales |
+
+- Los importes se formatean con `formatCents()` solo al presentar.
+- Desglose por servicio: siempre los seis `ServiceType` del catálogo (`src/constants/services.ts`), con `getServiceLabel()` para las etiquetas en español.
+- Desglose por usuario: agrupado por **UID** (`createdBy`), no por nombre. Ante nombres históricos distintos del mismo UID se muestra el nombre del registro más reciente (criterio documentado en el código); nunca se atribuyen ventas antiguas al nombre actual de otro usuario.
+- Documentos inválidos: se excluyen (no contaminan totales), quedan contados en `invalidSaleCount` y emiten `console.warn` en desarrollo.
+- Orden determinista: usuarios por total vendido ↓, luego ventas ↓, luego UID; servicios en orden de catálogo.
+
+### Pruebas automatizadas (reales) y verificación
+
+`npm test` (node --test): **67 pruebas, 67 pasan, 0 fallan**, incluidas `tests/report-periods.test.ts` (límites de día/semana, inicio incluido/fin excluido, cambios de mes/año, 29 de febrero bisiesto, calendario lun–dom) y `tests/report-aggregations.test.ts` (período vacío, una/varias ventas, suma exacta de centavos, ticket promedio, agrupación de los 6 servicios, usuarios por UID con nombres históricos, porcentajes con total cero y no cero, datos inválidos que no contaminan, venta editada que conserva su `createdAt`, venta eliminada que deja de contarse, precisión entera con importes grandes).
+
+Además: `npx tsc --noEmit` sin errores; `npx expo lint` sin errores (queda 1 warning **preexistente** en `src/services/firebase_example.ts`); `npx expo export --platform web` correcto, incluida la ruta `/(tabs)/reports`.
+
+**No se ejecutaron pruebas contra Firestore real** en este sprint: las pruebas automatizadas cubren solo las funciones puras. La suscripción en tiempo real y los reportes con datos reales quedan pendientes de prueba manual.
+
+### Limitaciones conocidas
+
+- **Zona horaria del dispositivo:** miembros en zonas horarias distintas ven límites de día/semana distintos. Una zona horaria del negocio requeriría almacenarla en el modelo (fuera de este sprint).
+- **Volumen alto:** un negocio con decenas de miles de ventas por semana haría poco práctica la consulta completa (lee todos los documentos del período). Si ocurriera, se evaluaría una estrategia de agregación (documentos resumen o Cloud Functions); expresamente NO se introduce ahora.
+- **Fechas pendientes:** una venta recién creada puede tardar unos segundos en aparecer hasta que el servidor confirma su `createdAt` (avisado en pantalla).
+- No incluido en esta versión: informes anuales, exportación a Excel/PDF, gráficas, nómina/comisiones, ganancias/costos, sistema de auditoría inmutable, agregaciones almacenadas, Cloud Functions.
+
+### Pruebas manuales recomendadas (pendientes)
+
+1. Abrir la pestaña Reportes con el día actual vacío: ceros + mensaje informativo, sin error.
+2. Registrar una venta desde Inicio y verla aparecer en el reporte del día (tiempo real) tras confirmarse su fecha.
+3. Editar una venta de un día anterior: el importe se actualiza en el día ORIGINAL, no en el de hoy.
+4. Eliminar una venta del período: el reporte se recalcula a la baja.
+5. Navegar día anterior/siguiente y semana anterior/siguiente; verificar que el rango mostrado coincide con lo consultado y que «Elegir fecha» abre el calendario y cambia el período.
+6. Con dos miembros del negocio (sesiones distintas), verificar que cada UID aparece con su nombre en el desglose por usuario y con los porcentajes correctos.
+7. Con un negocio de >100 ventas en un período (o repartidas en varios días), verificar que el reporte cuenta todas (prueba de que no depende del límite de 100 de `useSales`).
+8. Modo avión: estado de error con «Reintentar»; al recuperar la red, el reporte se sincroniza.
+
 ## Prueba de sincronización con dos teléfonos (Sprint 4) — PENDIENTE
 
 Procedimiento manual reproducible. **Obligatorio antes de dar el Sprint 4 por
