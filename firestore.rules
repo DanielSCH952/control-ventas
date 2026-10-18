@@ -1,0 +1,203 @@
+rules_version = '2';
+
+// Reglas de seguridad de Firestore — Sprint 2 (identidad y negocio) +
+// Sprint 3 (ventas).
+//
+// Modelo de datos:
+//   users/{uid}                         → perfil (name, businessId)
+//   businesses/{businessId}             → negocio (name, joinCode, createdBy)
+//   businesses/{businessId}/users/{uid} → membresía (uid, name, role, createdAt)
+//   businesses/{businessId}/sales/{id}  → venta (serviceType, quantity,
+//                                         unitPriceCents, totalCents,
+//                                         createdBy, createdByName,
+//                                         createdAt, updatedAt, notes?)
+//   joinCodes/{code}                    → { businessId } (búsqueda por código)
+//
+// Principios:
+//   - Todo requiere autenticación (Anonymous Authentication).
+//   - Los roles y businessId enviados por el cliente NO se confían:
+//     cada escritura se valida contra documentos existentes.
+//   - No se permite listar negocios ni códigos (solo lecturas puntuales).
+//   - El cambio de propietario, edición y borrado quedan bloqueados en este
+//     sprint (se habilitarán con sus propias reglas más adelante).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ===== Perfiles de usuario =====
+    match /users/{userId} {
+      // Cada usuario solo puede leer su propio perfil.
+      allow read: if isSignedIn() && request.auth.uid == userId;
+
+      // El perfil nace sin negocio y con el uid correcto.
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.businessId == null;
+
+      // El usuario puede actualizar su perfil, pero:
+      //  - el uid del documento no puede cambiar;
+      //  - businessId solo puede mantenerse igual o apuntar a un negocio
+      //    existente (la membresía es quien autoriza el acceso real).
+      allow update: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && (
+          request.resource.data.businessId == resource.data.businessId
+          || (
+            request.resource.data.businessId is string
+            && exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // ===== Códigos de invitación =====
+    // Colección de búsqueda: dado un código, obtener su businessId.
+    // Solo se permite `get` (probar un código concreto); nunca `list`,
+    // para evitar enumerar negocios ajenos.
+    match /joinCodes/{code} {
+      allow get: if isSignedIn();
+
+      // Solo el creador del negocio puede registrar SU código (el guardado
+      // en el propio negocio) apuntando a SU negocio.
+      allow create: if isSignedIn()
+        && request.resource.data.businessId is string
+        && exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+        && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.joinCode == code;
+
+      allow update, delete: if false;
+    }
+
+    // ===== Negocios =====
+    match /businesses/{businessId} {
+
+      // Solo los miembros del negocio pueden leerlo.
+      function isMember() {
+        return exists(/databases/$(database)/documents/businesses/$(businessId)/users/$(request.auth.uid));
+      }
+
+      function profileHasNoBusiness() {
+        return !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == null;
+      }
+
+      allow read: if isSignedIn() && isMember();
+
+      // Cualquier usuario autenticado sin negocio puede crear UN negocio,
+      // siempre que aparezca como su creador y los campos sean válidos.
+      allow create: if isSignedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.joinCode is string
+        && request.resource.data.joinCode.size() == 6
+        && profileHasNoBusiness();
+
+      // La edición, transferencia y borrado del negocio quedan fuera de
+      // este sprint.
+      allow update, delete: if false;
+
+      // ===== Membresías =====
+      match /users/{memberId} {
+        // Solo los miembros del negocio pueden ver la lista de membresías
+        // (acceso puntual por documento; no hay consultas con índices).
+        allow read: if isSignedIn() && isMember();
+
+        // La membresía siempre la crea el propio usuario, sobre su uid.
+        // Dos caminos válidos:
+        //  1) Propietario: creó este negocio (rol "owner").
+        //  2) Miembro: presenta un código válido que apunta a ESTE negocio
+        //     y su perfil no pertenece ya a otro negocio (rol "member").
+        allow create: if isSignedIn()
+          && request.auth.uid == memberId
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && (
+            (
+              request.resource.data.role == 'owner'
+              && get(/databases/$(database)/documents/businesses/$(businessId)).data.createdBy == request.auth.uid
+            )
+            || (
+              request.resource.data.role == 'member'
+              && request.resource.data.joinCode is string
+              && exists(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode))
+              && get(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode)).data.businessId == businessId
+              && profileHasNoBusiness()
+            )
+          );
+
+        // El cambio de rol (incluido quitar la propiedad) y el borrado de
+        // membresías quedan bloqueados en este sprint.
+        allow update, delete: if false;
+      }
+
+      // ===== Ventas (Sprint 3) =====
+      //
+      // Solo los miembros del negocio pueden leer y crear ventas; la
+      // edición y eliminación quedan bloqueadas hasta que se implementen
+      // en sprints posteriores. Los límites numéricos coinciden con las
+      // constantes de `src/services/saleService.ts`.
+      match /sales/{saleId} {
+
+        // Un documento de venta es válido si cumple el contrato completo:
+        // campos exactos (con `notes` opcional), tipos correctos, límites
+        // razonables, total coherente, registrante autenticado y
+        // timestamps de servidor.
+        function saleIsValid() {
+          return request.resource.data.keys().hasAll(
+                   ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
+                    'createdBy', 'createdByName', 'createdAt', 'updatedAt']
+                 )
+                 && request.resource.data.keys().hasOnly(
+                   ['serviceType', 'quantity', 'unitPriceCents', 'totalCents',
+                    'createdBy', 'createdByName', 'createdAt', 'updatedAt', 'notes']
+                 )
+                 && request.resource.data.serviceType in
+                      ['COPY_BW', 'COPY_COLOR', 'PRINT_BW', 'PRINT_COLOR', 'RECHARGE', 'OTHER']
+                 && request.resource.data.quantity is int
+                 && request.resource.data.quantity >= 1
+                 && request.resource.data.quantity <= 1000
+                 && request.resource.data.unitPriceCents is int
+                 && request.resource.data.unitPriceCents >= 0
+                 && request.resource.data.unitPriceCents <= 10000000
+                 && request.resource.data.totalCents is int
+                 && request.resource.data.totalCents >= 0
+                 && request.resource.data.totalCents
+                      == request.resource.data.quantity * request.resource.data.unitPriceCents
+                 && request.resource.data.createdBy == request.auth.uid
+                 && request.resource.data.createdByName is string
+                 && request.resource.data.createdByName.size() >= 1
+                 && request.resource.data.createdByName.size() <= 50
+                 && request.resource.data.createdAt == request.time
+                 && request.resource.data.updatedAt == request.time
+                 && (
+                   !('notes' in request.resource.data)
+                   || (request.resource.data.notes is string
+                       && request.resource.data.notes.size() <= 200)
+                 );
+        }
+
+        // Cualquier miembro del negocio puede consultar las ventas
+        // (consulta inicial del Sprint 3; `onSnapshot` llegará en el 4).
+        allow read: if isSignedIn() && isMember();
+
+        // Solo los miembros pueden crear ventas, siempre que el documento
+        // cumpla el contrato y figure el propio UID como registrante.
+        allow create: if isSignedIn() && isMember() && saleIsValid();
+
+        // La edición y eliminación de ventas no están implementadas.
+        allow update, delete: if false;
+      }
+    }
+  }
+}
