@@ -7,9 +7,9 @@ import { ReportCalendar } from '@/components/report-calendar';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { getServiceLabel } from '@/constants/services';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { useReportSales } from '@/hooks/useReportSales';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useReportSales } from '@/hooks/useReportSales';
 import type { ReportMode } from '@/types/Report';
 import { formatCents } from '@/utils/currency';
 import { formatDayLabel, formatTimeLabel } from '@/utils/datetime';
@@ -72,7 +72,7 @@ export default function ReportsScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} mode='padding' edges={{ bottom: 'off' }}>
         <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
           <ThemedText type="small" themeColor="textSecondary">
             Reportes
@@ -275,7 +275,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     paddingHorizontal: Spacing.four,
-    paddingBottom: BottomTabInset + Spacing.three,
+    paddingBottom: Spacing.three,
     maxWidth: MaxContentWidth,
   },
   content: {

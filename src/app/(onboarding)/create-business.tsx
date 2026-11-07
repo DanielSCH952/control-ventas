@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import {
   KeyboardAvoidingView,
@@ -17,6 +17,7 @@ import { useAuth } from '@/context/AuthContext';
 import type { Business } from '@/types/Business';
 import { AppError } from '@/services/errors';
 import { createBusiness, BUSINESS_NAME_MAX_LENGTH } from '@/services/businessService';
+import { generateBusinessId } from '@/utils/ids';
 
 /**
  * Pantalla para crear un negocio. Al terminar, muestra el código de
@@ -30,6 +31,11 @@ export default function CreateBusinessScreen() {
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Business | null>(null);
   const [copied, setCopied] = useState(false);
+  // Identificador ESTABLE del intento de creación: se genera una sola vez
+  // por pantalla y se reutiliza en todos los reintentos. Si la conexión se
+  // pierde a mitad de la creación, el reintento con el mismo identificador
+  // recupera el negocio a medias en lugar de crear uno duplicado (Sprint 6).
+  const attemptIdRef = useRef<string>(generateBusinessId());
 
   async function handleCreate() {
     if (saving || !user || !profile) {
@@ -42,6 +48,7 @@ export default function CreateBusinessScreen() {
         uid: user.uid,
         userName: profile.name,
         businessName,
+        attemptId: attemptIdRef.current,
       });
       setCreated(business);
     } catch (caught) {

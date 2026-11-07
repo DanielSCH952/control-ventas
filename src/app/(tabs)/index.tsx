@@ -1,22 +1,22 @@
-import { useCallback, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '@/components/primary-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { useAuth } from '@/context/AuthContext';
 import { getServiceLabel } from '@/constants/services';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useAuth } from '@/context/AuthContext';
 import { useSales } from '@/hooks/useSales';
 import { AppError } from '@/services/errors';
 import { deleteSale } from '@/services/saleService';
 import { canModifySale } from '@/services/saleValidation';
+import type { Sale } from '@/types/Sale';
 import { formatCents } from '@/utils/currency';
 import { formatSaleDate } from '@/utils/datetime';
-import type { Sale } from '@/types/Sale';
 
 /**
  * Pantalla principal. Muestra el negocio, su código de invitación y el
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     paddingHorizontal: Spacing.four,
-    paddingBottom: BottomTabInset + Spacing.three,
+    paddingBottom: Spacing.three,
     maxWidth: MaxContentWidth,
   },
   content: {

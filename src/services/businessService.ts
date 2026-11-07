@@ -127,6 +127,14 @@ export async function findBusinessIdByJoinCode(rawCode: string): Promise<string>
 /**
  * Crea un negocio y la membresía de propietario.
  *
+ * Sprint 6 — idempotencia y recuperación: el identificador del negocio es un
+ * `attemptId` ESTABLE que genera la pantalla UNA vez por intento (ver
+ * `create-business.tsx` e `ids.ts`). Si la conexión se pierde después de
+ * crear el documento del negocio pero antes de confirmar el batch, un
+ * reintento con el MISMO `attemptId` detecta el documento existente y solo
+ * completa las piezas que falten (membresía, código, perfil). Un mismo
+ * intento jamás crea un segundo negocio.
+ *
  * Nota sobre atomicidad: las reglas de seguridad de Firestore se evalúan
  * contra el estado previo de la base de datos, por lo que la membresía y
  * el código de invitación no pueden validarse en la misma transacción en
@@ -134,7 +142,9 @@ export async function findBusinessIdByJoinCode(rawCode: string): Promise<string>
  *   1) Se crea el documento del negocio (único paso no atómico).
  *   2) Un batch atómico crea: membresía del propietario, `joinCodes/{code}`
  *      y actualiza `users/{uid}.businessId`.
- * Si el paso 2 falla, no se muestra éxito y el usuario puede reintentarlo.
+ * Si el paso 2 falla, no se muestra éxito y el usuario puede reintentarlo
+ * sin riesgo de duplicar el negocio. Si en un reintento el nombre difiere
+ * del ya guardado, prevalece el nombre almacenado en el paso 1.
  *
  * @returns el negocio creado, con su código de invitación.
  */
@@ -142,56 +152,119 @@ export async function createBusiness(params: {
   uid: string;
   userName: string;
   businessName: string;
+  attemptId: string;
 }): Promise<Business> {
   const name = validateBusinessName(params.businessName);
+  const attemptId = params.attemptId.trim();
+  if (!attemptId) {
+    throw new AppError(
+      'No pudimos crear el negocio. Inténtalo de nuevo.',
+      'business-create-attempt-missing',
+    );
+  }
 
   try {
-    // Generar un código de invitación que no esté asignado a otro negocio.
+    const businessRef = doc(collection(db, 'businesses'), attemptId);
+    const existingSnapshot = await getDoc(businessRef);
+
+    let businessNameToUse = name;
     let joinCode = '';
-    for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
-      const candidate = generateJoinCode();
-      const candidateSnapshot = await getDoc(doc(db, 'joinCodes', candidate));
-      if (!candidateSnapshot.exists()) {
-        joinCode = candidate;
-        break;
+
+    if (existingSnapshot.exists()) {
+      // Recuperación de un intento anterior: el documento ya nació. Solo el
+      // creador original puede completarlo; cualquier otro caso se aborta.
+      const existing = existingSnapshot.data() as {
+        name?: unknown;
+        joinCode?: unknown;
+        createdBy?: unknown;
+      };
+      if (
+        existing.createdBy !== params.uid ||
+        typeof existing.name !== 'string' ||
+        typeof existing.joinCode !== 'string'
+      ) {
+        throw new AppError(
+          'No pudimos crear el negocio. Inténtalo de nuevo con otro nombre.',
+          'business-create-conflict',
+        );
       }
+      businessNameToUse = existing.name;
+      joinCode = existing.joinCode;
+    } else {
+      // Primer intento: generar un código de invitación libre.
+      for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
+        const candidate = generateJoinCode();
+        const candidateSnapshot = await getDoc(doc(db, 'joinCodes', candidate));
+        if (!candidateSnapshot.exists()) {
+          joinCode = candidate;
+          break;
+        }
+      }
+      if (!joinCode) {
+        throw new AppError(
+          'No pudimos generar un código de invitación. Inténtalo de nuevo.',
+          'join-code-generation-failed',
+        );
+      }
+
+      // Paso 1: documento del negocio con el identificador estable del intento.
+      await setDoc(businessRef, {
+        name,
+        joinCode,
+        createdBy: params.uid,
+        createdAt: serverTimestamp(),
+      });
     }
-    if (!joinCode) {
-      throw new AppError(
-        'No pudimos generar un código de invitación. Inténtalo de nuevo.',
-        'join-code-generation-failed',
-      );
+
+    // Paso 2: batch con SOLO las piezas que falten (idempotente). Un reintento
+    // tras un batch ya confirmado no reescribe nada.
+    const membershipRef = doc(db, 'businesses', businessRef.id, 'users', params.uid);
+    const joinCodeRef = doc(db, 'joinCodes', joinCode);
+    const profileRef = doc(db, 'users', params.uid);
+
+    const [membershipSnapshot, joinCodeSnapshot, profileSnapshot] = await Promise.all([
+      getDoc(membershipRef),
+      getDoc(joinCodeRef),
+      getDoc(profileRef),
+    ]);
+
+    const membershipMissing =
+      !membershipSnapshot.exists() ||
+      (membershipSnapshot.data() as { uid?: unknown }).uid !== params.uid;
+    const joinCodeMissing =
+      !joinCodeSnapshot.exists() ||
+      (joinCodeSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
+    const profileMissing =
+      !profileSnapshot.exists() ||
+      (profileSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
+
+    if (membershipMissing || joinCodeMissing || profileMissing) {
+      const batch = writeBatch(db);
+      if (membershipMissing) {
+        batch.set(membershipRef, {
+          uid: params.uid,
+          name: params.userName,
+          role: 'owner',
+          createdAt: serverTimestamp(),
+        });
+      }
+      if (joinCodeMissing) {
+        batch.set(joinCodeRef, { businessId: businessRef.id });
+      }
+      if (profileMissing) {
+        batch.set(
+          profileRef,
+          { businessId: businessRef.id, updatedAt: serverTimestamp() },
+          { merge: true },
+        );
+      }
+      await batch.commit();
     }
 
-    // Paso 1: documento del negocio (identificador generado por Firestore).
-    const businessRef = doc(collection(db, 'businesses'));
-    await setDoc(businessRef, {
-      name,
-      joinCode,
-      createdBy: params.uid,
-      createdAt: serverTimestamp(),
-    });
-
-    // Paso 2: batch atómico con el resto de las escrituras.
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'businesses', businessRef.id, 'users', params.uid), {
-      uid: params.uid,
-      name: params.userName,
-      role: 'owner',
-      createdAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'joinCodes', joinCode), { businessId: businessRef.id });
-    batch.set(
-      doc(db, 'users', params.uid),
-      { businessId: businessRef.id, updatedAt: serverTimestamp() },
-      { merge: true },
-    );
-    await batch.commit();
-
-    // Devolvemos el negocio con los valores que acabamos de escribir.
+    // Devolvemos el negocio con los valores almacenados.
     return {
       id: businessRef.id,
-      name,
+      name: businessNameToUse,
       joinCode,
       createdBy: params.uid,
       createdAt: new Date(),

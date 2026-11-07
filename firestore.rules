@@ -39,15 +39,21 @@ service cloud.firestore {
         && request.resource.data.uid == userId
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 50
         && request.resource.data.businessId == null;
 
       // El usuario puede actualizar su perfil, pero:
       //  - el uid del documento no puede cambiar;
+      //  - el nombre debe seguir siendo un texto no vacío y acotado (un
+      //    nombre corrupto rompería las pantallas que lo muestran);
       //  - businessId solo puede mantenerse igual o apuntar a un negocio
       //    existente (la membresía es quien autoriza el acceso real).
       allow update: if isSignedIn()
         && request.auth.uid == userId
         && request.resource.data.uid == userId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 50
         && (
           request.resource.data.businessId == resource.data.businessId
           || (
@@ -116,9 +122,12 @@ service cloud.firestore {
 
       // ===== Membresías =====
       match /users/{memberId} {
-        // Solo los miembros del negocio pueden ver la lista de membresías
-        // (acceso puntual por documento; no hay consultas con índices).
-        allow read: if isSignedIn() && isMember();
+        // Solo los miembros del negocio pueden ver las membresías. Cada
+        // usuario puede leer además SU PROPIA membresía, necesaria para
+        // verificar el resultado de una unión con confirmación desconocida
+        // (Sprint 6). No se permite enumerar membresías ajenas.
+        allow read: if isSignedIn()
+          && (isMember() || request.auth.uid == memberId);
 
         // La membresía siempre la crea el propio usuario, sobre su uid.
         // Dos caminos válidos:
