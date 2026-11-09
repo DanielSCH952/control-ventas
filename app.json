@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "control-ventas",
+    "name": "Control de ventas",
     "slug": "control-ventas",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,11 +11,13 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.dev-dsch.control-ventas",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
+        "backgroundImage": "./assets/images/adaptive-icon-background.png",
+        "monochromeImage": "./assets/images/adaptive-icon-monochrome.png",
+        "backgroundColor": "#063A91"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -29,15 +31,21 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "resizeMode": "contain",
+          "backgroundColor": "#06265D"
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "43afaf44-6f5b-48e3-b279-6c56bbf91157"
+      }
     }
   }
 }
