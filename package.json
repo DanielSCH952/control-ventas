@@ -48,7 +48,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --experimental-transform-types --import ./tests/bootstrap.mjs --test \"tests/**/*.test.ts\""
+    "test": "node --experimental-transform-types --import ./tests/bootstrap.mjs --test \"tests/**/*.test.ts\"",
+    "deploy:rules": "npx --yes firebase-tools deploy --only firestore:rules --project app-control-ventas-9b329 --non-interactive"
   },
   "private": true
 }
