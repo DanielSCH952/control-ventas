@@ -1,0 +1,47 @@
+# .easignore — reglas de exclusión para el upload de EAS Build.
+# Reemplaza todas las reglas de .gitignore durante el upload.
+# Única diferencia intencional: se omite la regla `firebase.ts` para que
+# src/services/firebase.ts (config web pública de Firebase, sin secretos
+# privados) se incluya en la compilación en la nube. No editar sin revisión.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+example
+
+# generated native folders
+/ios
+/android
