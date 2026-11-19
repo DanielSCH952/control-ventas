@@ -86,7 +86,7 @@ service cloud.firestore {
     // ===== Negocios =====
     match /businesses/{businessId} {
 
-      // Solo los miembros del negocio pueden leerlo.
+      // Comprueba si el usuario autenticado tiene membresía en este negocio.
       function isMember() {
         return exists(/databases/$(database)/documents/businesses/$(businessId)/users/$(request.auth.uid));
       }
@@ -104,7 +104,18 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == null;
       }
 
-      allow read: if isSignedIn() && isMember();
+      // createBusiness necesita comprobar un ID antes del primer intento y
+      // recuperar un negocio propio si falló el batch que crea la membresía.
+      // Una lectura puntual de un ID inexistente no devuelve datos; si ya
+      // existe, solo se expone a miembros o a su creador. Los listados siguen
+      // reservados a miembros y nunca se permiten por "documento inexistente".
+      allow get: if isSignedIn()
+        && (
+          !exists(/databases/$(database)/documents/businesses/$(businessId))
+          || isMember()
+          || isBusinessOwner()
+        );
+      allow list: if isSignedIn() && isMember();
 
       // Cualquier usuario autenticado sin negocio puede crear UN negocio,
       // siempre que aparezca como su creador y los campos sean válidos.

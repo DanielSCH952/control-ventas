@@ -11,8 +11,8 @@ import {
 
 import type { Business } from '@/types/Business';
 
-import { db } from './firebase';
 import { AppError } from './errors';
+import { db } from './firebase';
 import { parseDate } from './firestore-utils';
 
 export const BUSINESS_NAME_MAX_LENGTH = 60;
@@ -154,6 +154,7 @@ export async function createBusiness(params: {
   businessName: string;
   attemptId: string;
 }): Promise<Business> {
+  console.log("Params:", params);
   const name = validateBusinessName(params.businessName);
   const attemptId = params.attemptId.trim();
   if (!attemptId) {
@@ -228,15 +229,9 @@ export async function createBusiness(params: {
       getDoc(profileRef),
     ]);
 
-    const membershipMissing =
-      !membershipSnapshot.exists() ||
-      (membershipSnapshot.data() as { uid?: unknown }).uid !== params.uid;
-    const joinCodeMissing =
-      !joinCodeSnapshot.exists() ||
-      (joinCodeSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
-    const profileMissing =
-      !profileSnapshot.exists() ||
-      (profileSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
+    const membershipMissing =!membershipSnapshot.exists() ||(membershipSnapshot.data() as { uid?: unknown }).uid !== params.uid;
+    const joinCodeMissing =!joinCodeSnapshot.exists() ||(joinCodeSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
+    const profileMissing =!profileSnapshot.exists() ||(profileSnapshot.data() as { businessId?: unknown }).businessId !== businessRef.id;
 
     if (membershipMissing || joinCodeMissing || profileMissing) {
       const batch = writeBatch(db);

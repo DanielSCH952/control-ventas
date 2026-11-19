@@ -39,7 +39,9 @@ const EMULATOR_PORT = 8080; // Puerto configurado en firebase.json.
 const ALICE = 'alice'; // Propietaria del negocio «neg-1».
 const BOB = 'bob'; // Miembro que se unió por código.
 const CAROL = 'carol'; // Usuario autenticado SIN perfil ni negocio.
+const DAVE = 'dave'; // Usuario con perfil, sin negocio, que completa el alta.
 const BUSINESS = 'neg-1';
+const PENDING_BUSINESS = 'neg-pendiente-dave';
 const JOIN_CODE = 'ABC234';
 
 let env: RulesTestEnvironment | null = null;
@@ -85,10 +87,24 @@ before(async () => {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    await db.doc(`users/${DAVE}`).set({
+      uid: DAVE,
+      name: 'Dave',
+      businessId: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
     await db.doc(`businesses/${BUSINESS}`).set({
       name: 'Papelería Alice',
       joinCode: JOIN_CODE,
       createdBy: ALICE,
+      createdAt: serverTimestamp(),
+    });
+    // Paso 1 confirmado y paso 2 pendiente: aún no hay membresía ni joinCode.
+    await db.doc(`businesses/${PENDING_BUSINESS}`).set({
+      name: 'Negocio pendiente de Dave',
+      joinCode: 'PND234',
+      createdBy: DAVE,
       createdAt: serverTimestamp(),
     });
     await db.doc(`businesses/${BUSINESS}/users/${ALICE}`).set({
@@ -174,6 +190,37 @@ describe('Reglas de Firestore: negocios', () => {
     await assertFails(db.doc(`businesses/${BUSINESS}`).get());
   });
 
+  it('createBusiness puede comprobar que el ID de un primer intento no existe', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.authenticatedContext(CAROL).firestore();
+    const snapshot = await assertSucceeds(db.doc('businesses/intento-inexistente').get());
+    assert.equal(snapshot.exists, false);
+  });
+
+  it('el creador puede recuperar su negocio incompleto, pero un tercero no', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const creatorDb = env.authenticatedContext(DAVE).firestore();
+    const snapshot = await assertSucceeds(
+      creatorDb.doc(`businesses/${PENDING_BUSINESS}`).get(),
+    );
+    assert.equal(snapshot.data()?.createdBy, DAVE);
+
+    const otherDb = env.authenticatedContext(CAROL).firestore();
+    await assertFails(otherDb.doc(`businesses/${PENDING_BUSINESS}`).get());
+  });
+
+  it('un usuario NO autenticado no puede comprobar IDs de negocios inexistentes', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.unauthenticatedContext().firestore();
+    await assertFails(db.doc('businesses/intento-inexistente').get());
+  });
+
+  it('la excepción para IDs inexistentes NO habilita listar negocios', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.authenticatedContext(CAROL).firestore();
+    await assertFails(db.collection('businesses').get());
+  });
+
   it('usuario sin negocio puede crear UN negocio (paso 1 de createBusiness)', async (t) => {
     if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
     const db = env.authenticatedContext(CAROL).firestore();
@@ -185,6 +232,90 @@ describe('Reglas de Firestore: negocios', () => {
         createdAt: serverTimestamp(),
       }),
     );
+  });
+
+  it('createBusiness completa el alta real: negocio, membresía, código y perfil', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.authenticatedContext(DAVE).firestore();
+    const businessRef = db.doc('businesses/intento-dave-completo');
+    const joinCode = 'MNP234';
+    const membershipRef = businessRef.collection('users').doc(DAVE);
+    const joinCodeRef = db.doc(`joinCodes/${joinCode}`);
+    const profileRef = db.doc(`users/${DAVE}`);
+
+    // Lecturas previas del servicio: intento nuevo y código disponible.
+    const initialSnapshot = await assertSucceeds(businessRef.get());
+    const availableCodeSnapshot = await assertSucceeds(joinCodeRef.get());
+    assert.equal(initialSnapshot.exists, false);
+    assert.equal(availableCodeSnapshot.exists, false);
+
+    // Paso 1: nace el negocio con el UID autenticado como propietario.
+    await assertSucceeds(
+      businessRef.set({
+        name: 'Negocio completo de Dave',
+        joinCode,
+        createdBy: DAVE,
+        createdAt: serverTimestamp(),
+      }),
+    );
+
+    // Paso 2: comprobaciones y batch idempotente del servicio.
+    const [membershipBefore, joinCodeBefore, profileBefore] = await Promise.all([
+      assertSucceeds(membershipRef.get()),
+      assertSucceeds(joinCodeRef.get()),
+      assertSucceeds(profileRef.get()),
+    ]);
+    assert.equal(membershipBefore.exists, false);
+    assert.equal(joinCodeBefore.exists, false);
+    assert.equal(profileBefore.data()?.businessId, null);
+
+    const batch = db.batch();
+    batch.set(membershipRef, {
+      uid: DAVE,
+      name: 'Dave',
+      role: 'owner',
+      createdAt: serverTimestamp(),
+    });
+    batch.set(joinCodeRef, { businessId: businessRef.id });
+    batch.set(
+      profileRef,
+      { businessId: businessRef.id, updatedAt: serverTimestamp() },
+      { merge: true },
+    );
+    await assertSucceeds(batch.commit());
+
+    const [businessAfter, membershipAfter, joinCodeAfter, profileAfter] = await Promise.all([
+      assertSucceeds(businessRef.get()),
+      assertSucceeds(membershipRef.get()),
+      assertSucceeds(joinCodeRef.get()),
+      assertSucceeds(profileRef.get()),
+    ]);
+    assert.equal(businessAfter.data()?.createdBy, DAVE);
+    assert.equal(membershipAfter.data()?.uid, DAVE);
+    assert.equal(membershipAfter.data()?.role, 'owner');
+    assert.equal(joinCodeAfter.data()?.businessId, businessRef.id);
+    assert.equal(profileAfter.data()?.businessId, businessRef.id);
+  });
+
+  it('un usuario NO puede crear un negocio a nombre de otro UID', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.authenticatedContext(CAROL).firestore();
+    await assertFails(
+      db.doc('businesses/intento-carol-suplantado').set({
+        name: 'Negocio suplantado',
+        joinCode: 'SPL234',
+        createdBy: ALICE,
+        createdAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('la corrección de lectura NO habilita editar ni eliminar negocios', async (t) => {
+    if (!env) return t.skip('Emulador de Firestore no disponible (puerto 8080).');
+    const db = env.authenticatedContext(ALICE).firestore();
+    const businessRef = db.doc(`businesses/${BUSINESS}`);
+    await assertFails(businessRef.update({ name: 'Nombre modificado' }));
+    await assertFails(businessRef.delete());
   });
 
   it('usuario que YA pertenece a un negocio NO puede crear otro', async (t) => {

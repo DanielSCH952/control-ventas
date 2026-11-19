@@ -43,9 +43,10 @@ Resumen de las reglas (detalle en el propio archivo):
 - `joinCodes/{code}`: `get` para autenticados (probar un código concreto);
   `create` solo por el creador del negocio y solo para SU código; sin
   `list`, `update` ni `delete`.
-- `businesses/{id}`: lectura solo para miembros (existe su membresía);
-  `create` por usuarios sin negocio que figuran como `createdBy`;
-  `update`/`delete` bloqueados en este sprint.
+- `businesses/{id}`: lectura puntual para miembros, para el creador durante
+  la recuperación de un alta incompleta y para comprobar IDs inexistentes;
+  los listados siguen limitados a miembros. `create` por usuarios sin negocio
+  que figuran como `createdBy`; `update`/`delete` bloqueados en este sprint.
 - Membresías: lectura solo por miembros; `create` por el propio usuario
   como `owner` (si creó el negocio) o como `member` (si presenta un código
   válido que apunta a ESE negocio y su perfil no pertenece ya a otro);
