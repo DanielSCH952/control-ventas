@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareForm } from '@/components/keyboard-aware-form';
 import { LoadingView } from '@/components/loading-view';
 import { PrimaryButton } from '@/components/primary-button';
 import { SaleForm } from '@/components/sale-form';
@@ -146,38 +139,34 @@ export default function EditSaleScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-neutral-950">
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1">
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View className="w-full gap-6" style={{ maxWidth: 480 }}>
-            <View className="gap-2">
-              <Text className="text-2xl font-bold text-neutral-900 dark:text-white">
-                Editar venta
-              </Text>
-              <Text className="text-base text-neutral-600 dark:text-neutral-400">
-                {getServiceLabel(sale.serviceType)} · {formatSaleDate(sale.createdAt)}
-              </Text>
-              <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-                Registrada por {sale.createdByName}. La fecha de creación y el autor
-                original se conservan; los cambios quedan registrados en tu nombre.
-              </Text>
-            </View>
-
-            <SaleForm
-              initialValues={{
-                serviceType: sale.serviceType,
-                quantity: sale.quantity,
-                unitPriceCents: sale.unitPriceCents,
-                notes: sale.notes,
-              }}
-              submitLabel="Guardar cambios"
-              savingLabel="Guardando…"
-              onSubmit={handleSubmit}
-            />
+      <KeyboardAwareForm contentContainerStyle={styles.scrollContent}>
+        <View className="w-full gap-6" style={{ maxWidth: 480 }}>
+          <View className="gap-2">
+            <Text className="text-2xl font-bold text-neutral-900 dark:text-white">
+              Editar venta
+            </Text>
+            <Text className="text-base text-neutral-600 dark:text-neutral-400">
+              {getServiceLabel(sale.serviceType)} · {formatSaleDate(sale.createdAt)}
+            </Text>
+            <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+              Registrada por {sale.createdByName}. La fecha de creación y el autor
+              original se conservan; los cambios quedan registrados en tu nombre.
+            </Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+
+          <SaleForm
+            initialValues={{
+              serviceType: sale.serviceType,
+              quantity: sale.quantity,
+              unitPriceCents: sale.unitPriceCents,
+              notes: sale.notes,
+            }}
+            submitLabel="Guardar cambios"
+            savingLabel="Guardando…"
+            onSubmit={handleSubmit}
+          />
+        </View>
+      </KeyboardAwareForm>
     </SafeAreaView>
   );
 }

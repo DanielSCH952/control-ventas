@@ -135,9 +135,7 @@ export default function HomeScreen() {
               <PrimaryButton label="Registrar venta" onPress={() => router.push('/sales/new')} />
             </View>
 
-            {/* Carga inicial: la suscripción aún no ha devuelto la primera
-                instantánea. Las actualizaciones posteriores NO muestran este
-                indicador: la lista cambia en su sitio. */}
+            {/* Carga inicial: la suscripción aún no ha devuelto la primera instantánea. Las actualizaciones posteriores NO muestran este indicador: la lista cambia en su sitio. */}
             {loading ? (
               <ActivityIndicator style={styles.salesState} />
             ) : sales && sales.length > 0 ? (

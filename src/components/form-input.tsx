@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useContext, useRef, useState } from 'react';
 import { Text, TextInput, View, type TextInputProps } from 'react-native';
+
+import { KeyboardAwareFormContext } from '@/context/KeyboardAwareFormContext';
 
 interface FormInputProps extends Omit<TextInputProps, 'className'> {
   label: string;
@@ -15,19 +17,39 @@ interface FormInputProps extends Omit<TextInputProps, 'className'> {
  */
 export function FormInput({ label, error, maxLength, className = '', ...inputProps }: FormInputProps) {
   const [focused, setFocused] = useState(false);
+  const inputRef = useRef<TextInput>(null);
+  const keyboardAwareForm = useContext(KeyboardAwareFormContext);
+
+  const setInputRef = useCallback(
+    (input: TextInput | null) => {
+      const previousInput = inputRef.current;
+      if (previousInput && previousInput !== input) {
+        keyboardAwareForm?.clearInput(previousInput);
+      }
+      inputRef.current = input;
+    },
+    [keyboardAwareForm],
+  );
 
   return (
     <View className="w-full gap-2">
       <Text className="text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</Text>
       <TextInput
         {...inputProps}
+        ref={setInputRef}
         maxLength={maxLength}
         onFocus={(event) => {
           setFocused(true);
+          if (inputRef.current) {
+            keyboardAwareForm?.showInput(inputRef.current);
+          }
           inputProps.onFocus?.(event);
         }}
         onBlur={(event) => {
           setFocused(false);
+          if (inputRef.current) {
+            keyboardAwareForm?.clearInput(inputRef.current);
+          }
           inputProps.onBlur?.(event);
         }}
         accessibilityLabel={label}

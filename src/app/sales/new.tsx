@@ -1,21 +1,13 @@
 import { useRef } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Redirect, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareForm } from '@/components/keyboard-aware-form';
 import { LoadingView } from '@/components/loading-view';
 import { SaleForm } from '@/components/sale-form';
 import { useAuth } from '@/context/AuthContext';
 import { createSale } from '@/services/saleService';
-import { AppError } from '@/services/errors';
 import { generateSaleId } from '@/utils/ids';
 import type { CreateSaleInput } from '@/types/Sale';
 
@@ -72,28 +64,24 @@ export default function NewSaleScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-neutral-950">
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1">
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View className="w-full gap-6" style={{ maxWidth: 480 }}>
-            <View className="gap-2">
-              <Text className="text-2xl font-bold text-neutral-900 dark:text-white">
-                Registrar venta
-              </Text>
-              <Text className="text-base text-neutral-600 dark:text-neutral-400">
-                Se guardará en «{business.name}».
-              </Text>
-            </View>
-
-            <SaleForm
-              submitLabel="Guardar venta"
-              savingLabel="Guardando…"
-              onSubmit={handleSubmit}
-            />
+      <KeyboardAwareForm contentContainerStyle={styles.scrollContent}>
+        <View className="w-full gap-6" style={{ maxWidth: 480 }}>
+          <View className="gap-2">
+            <Text className="text-2xl font-bold text-neutral-900 dark:text-white">
+              Registrar venta
+            </Text>
+            <Text className="text-base text-neutral-600 dark:text-neutral-400">
+              Se guardará en «{business.name}».
+            </Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+
+          <SaleForm
+            submitLabel="Guardar venta"
+            savingLabel="Guardando…"
+            onSubmit={handleSubmit}
+          />
+        </View>
+      </KeyboardAwareForm>
     </SafeAreaView>
   );
 }
