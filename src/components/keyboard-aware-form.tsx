@@ -10,11 +10,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   type ScrollViewProps,
-  type TextInput,
 } from 'react-native';
 
 import {
   KeyboardAwareFormContext,
+  type KeyboardAwareField,
   type KeyboardAwareFormContextValue,
 } from '@/context/KeyboardAwareFormContext';
 import { getInputScrollDelta } from '@/utils/keyboardVisibility';
@@ -34,13 +34,17 @@ interface KeyboardAwareFormProps extends ScrollViewProps {
 }
 
 interface ScrollRequest {
-  input: TextInput;
+  field: KeyboardAwareField;
   targetY: number;
 }
 
 /**
- * Formulario vertical que mantiene visible el FormInput enfocado.
- * Android usa adjustResize; iOS usa KeyboardAvoidingView sin duplicar insets.
+ * Formulario vertical que mantiene visible el campo enfocado.
+ *
+ * Expo SDK 57 usa Android edge-to-edge: la ventana ya no se reduce al abrir
+ * el teclado. `KeyboardAvoidingView` aplica el inset en ambas plataformas y
+ * la medición posterior usa únicamente el viewport ya visible, evitando sumar
+ * el teclado dos veces.
  */
 export function KeyboardAwareForm({
   children,
@@ -57,7 +61,7 @@ export function KeyboardAwareForm({
 }: KeyboardAwareFormProps) {
   const scrollViewRef = useRef<ScrollView>(null);
   const viewportRef = useRef<View>(null);
-  const focusedInputRef = useRef<TextInput>(null);
+  const focusedInputRef = useRef<KeyboardAwareField | null>(null);
   const scrollOffsetRef = useRef(0);
   const keyboardVisibleRef = useRef(false);
   const viewportHeightRef = useRef<number | null>(null);
@@ -67,25 +71,25 @@ export function KeyboardAwareForm({
   const lastScrollRequestRef = useRef<ScrollRequest | null>(null);
 
   const ensureInputVisible = useCallback(() => {
-    const input = focusedInputRef.current;
+    const field = focusedInputRef.current;
     const viewport = viewportRef.current;
-    if (!mountedRef.current || !input || !viewport) {
+    if (!mountedRef.current || !field || !viewport) {
       return;
     }
 
     viewport.measureInWindow((_x, viewportTop, _width, viewportHeight) => {
-      if (!mountedRef.current || focusedInputRef.current !== input || viewportHeight <= 0) {
+      if (!mountedRef.current || focusedInputRef.current !== field || viewportHeight <= 0) {
         return;
       }
 
-      input.measureInWindow((_inputX, inputTop, _inputWidth, inputHeight) => {
-        if (!mountedRef.current || focusedInputRef.current !== input || inputHeight <= 0) {
+      field.measureInWindow((_fieldX, fieldTop, _fieldWidth, fieldHeight) => {
+        if (!mountedRef.current || focusedInputRef.current !== field || fieldHeight <= 0) {
           return;
         }
 
         const delta = getInputScrollDelta({
-          inputTop,
-          inputBottom: inputTop + inputHeight,
+          inputTop: fieldTop,
+          inputBottom: fieldTop + fieldHeight,
           viewportTop,
           viewportBottom: viewportTop + viewportHeight,
           margin: inputMargin,
@@ -99,13 +103,13 @@ export function KeyboardAwareForm({
         const targetY = Math.max(0, scrollOffsetRef.current + delta);
         const previousRequest = lastScrollRequestRef.current;
         if (
-          previousRequest?.input === input &&
+          previousRequest?.field === field &&
           Math.abs(previousRequest.targetY - targetY) < MIN_SCROLL_DELTA
         ) {
           return;
         }
 
-        lastScrollRequestRef.current = { input, targetY };
+        lastScrollRequestRef.current = { field, targetY };
         scrollViewRef.current?.scrollTo({ y: targetY, animated: true });
       });
     });
@@ -241,8 +245,8 @@ export function KeyboardAwareForm({
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      enabled={Platform.OS === 'ios'}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      enabled={true}
       keyboardVerticalOffset={keyboardVerticalOffset}
       style={styles.container}>
       <View ref={viewportRef} style={styles.container} onLayout={handleLayout}>

@@ -1,7 +1,10 @@
 import { useCallback, useContext, useRef, useState } from 'react';
 import { Text, TextInput, View, type TextInputProps } from 'react-native';
 
-import { KeyboardAwareFormContext } from '@/context/KeyboardAwareFormContext';
+import {
+  KeyboardAwareFormContext,
+  type KeyboardAwareField,
+} from '@/context/KeyboardAwareFormContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 const PLACEHOLDER_COLORS = {
@@ -26,6 +29,7 @@ export function FormInput({ label, error, maxLength, className = '', ...inputPro
   const colorScheme = useColorScheme();
   const defaultPlaceholderColor = PLACEHOLDER_COLORS[colorScheme === 'dark' ? 'dark' : 'light'];
   const inputRef = useRef<TextInput>(null);
+  const fieldRef = useRef<View>(null);
   const keyboardAwareForm = useContext(KeyboardAwareFormContext);
 
   const setInputRef = useCallback(
@@ -39,8 +43,22 @@ export function FormInput({ label, error, maxLength, className = '', ...inputPro
     [keyboardAwareForm],
   );
 
+  const showFocusedField = useCallback(() => {
+    const field = fieldRef.current;
+    if (field) {
+      keyboardAwareForm?.showInput(field);
+    }
+  }, [keyboardAwareForm]);
+
+  const clearFocusedField = useCallback(() => {
+    const field = fieldRef.current;
+    if (field) {
+      keyboardAwareForm?.clearInput(field);
+    }
+  }, [keyboardAwareForm]);
+
   return (
-    <View className="w-full gap-2">
+    <View ref={fieldRef} className="w-full gap-2">
       <Text className="text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</Text>
       <TextInput
         {...inputProps}
@@ -49,16 +67,12 @@ export function FormInput({ label, error, maxLength, className = '', ...inputPro
         placeholderTextColor={inputProps.placeholderTextColor ?? defaultPlaceholderColor}
         onFocus={(event) => {
           setFocused(true);
-          if (inputRef.current) {
-            keyboardAwareForm?.showInput(inputRef.current);
-          }
+          showFocusedField();
           inputProps.onFocus?.(event);
         }}
         onBlur={(event) => {
           setFocused(false);
-          if (inputRef.current) {
-            keyboardAwareForm?.clearInput(inputRef.current);
-          }
+          clearFocusedField();
           inputProps.onBlur?.(event);
         }}
         accessibilityLabel={label}

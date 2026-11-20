@@ -1,9 +1,14 @@
 import { createContext } from 'react';
-import type { TextInput } from 'react-native';
+
+export interface KeyboardAwareField {
+  measureInWindow: (
+    callback: (x: number, y: number, width: number, height: number) => void,
+  ) => void;
+}
 
 export interface KeyboardAwareFormContextValue {
-  showInput: (input: TextInput) => void;
-  clearInput: (input: TextInput) => void;
+  showInput: (field: KeyboardAwareField) => void;
+  clearInput: (field: KeyboardAwareField) => void;
 }
 
 /**
