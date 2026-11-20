@@ -154,7 +154,6 @@ export async function createBusiness(params: {
   businessName: string;
   attemptId: string;
 }): Promise<Business> {
-  console.log("Params:", params);
   const name = validateBusinessName(params.businessName);
   const attemptId = params.attemptId.trim();
   if (!attemptId) {
