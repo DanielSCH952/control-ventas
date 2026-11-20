@@ -2,6 +2,12 @@ import { useCallback, useContext, useRef, useState } from 'react';
 import { Text, TextInput, View, type TextInputProps } from 'react-native';
 
 import { KeyboardAwareFormContext } from '@/context/KeyboardAwareFormContext';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+
+const PLACEHOLDER_COLORS = {
+  light: '#737373',
+  dark: '#A3A3A3',
+} as const;
 
 interface FormInputProps extends Omit<TextInputProps, 'className'> {
   label: string;
@@ -17,6 +23,8 @@ interface FormInputProps extends Omit<TextInputProps, 'className'> {
  */
 export function FormInput({ label, error, maxLength, className = '', ...inputProps }: FormInputProps) {
   const [focused, setFocused] = useState(false);
+  const colorScheme = useColorScheme();
+  const defaultPlaceholderColor = PLACEHOLDER_COLORS[colorScheme === 'dark' ? 'dark' : 'light'];
   const inputRef = useRef<TextInput>(null);
   const keyboardAwareForm = useContext(KeyboardAwareFormContext);
 
@@ -38,6 +46,7 @@ export function FormInput({ label, error, maxLength, className = '', ...inputPro
         {...inputProps}
         ref={setInputRef}
         maxLength={maxLength}
+        placeholderTextColor={inputProps.placeholderTextColor ?? defaultPlaceholderColor}
         onFocus={(event) => {
           setFocused(true);
           if (inputRef.current) {
